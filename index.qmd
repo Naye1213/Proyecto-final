@@ -1,0 +1,331 @@
+---
+title: "Proyecto"
+author: "NayelyArayaV.C10561_KhiaraMorales.C25244"
+format: dashboard
+server: shiny
+---
+
+```{r}
+#| label: carga-paquetes
+#| context: setup
+#| warning: false
+#| message: false
+
+
+# Carga de paquetes
+library(tidyverse)
+library(plotly)
+library(DT)
+library(terra)
+library(leaflet)
+library(leaflet.extras)
+library(leafem)
+library(sf)
+library(ggthemes)
+library(hrbrthemes)
+library(viridisLite)
+library(shiny)
+library(rsconnect)
+```
+
+```{r}
+#| label: carga-union-datos
+#| context: data
+
+
+# CARGA DE DATOS
+
+# Registros de presencia
+registros_iguanidae <-
+  st_read(
+    dsn = "registros-iguanidae.csv",
+    options = c(
+      "X_POSSIBLE_NAMES=decimalLongitude",
+      "Y_POSSIBLE_NAMES=decimalLatitude"
+    ),
+    quiet = TRUE
+  )
+# Asignación del CRS WGS84 al objeto registros
+st_crs(registros_iguanidae) <- 4326
+
+# Para asegurarse de que la columna age sea numérica
+registros_iguanidae$year <- as.integer(registros_iguanidae$year)
+
+# Especies
+especies_reptiles <-
+  read_csv("especies-reptiles.csv")
+
+# Registros
+regiones_socioeconomicas <-
+  st_read("regiones-socioeconomicas.gpkg", quiet = TRUE)
+
+
+# UNIONES DE DATOS
+
+# Registros de presencia + Especies
+registros_union_especies <- 
+  left_join(
+    x = registros_iguanidae,
+    y = especies_reptiles,
+    by = "species")
+
+# Registros de presencia + Especies + Regiones
+registros_union_especies_regiones <-
+  st_join(
+    x = registros_union_especies,
+    y = dplyr::select(regiones_socioeconomicas, region),
+    join = st_within
+  )
+```
+
+# {.sidebar}
+
+```{r}
+#| label: panel-widgets-entrada
+
+
+# Lista ordenada de especies
+# con un elemento adicional = "Todas"
+lista_especies <- unique(registros_union_especies_regiones$species)
+lista_especies <- sort(lista_especies)
+lista_especies <- c("Todas", lista_especies)
+
+# Widget de lista de selección de especies
+selectInput(
+  inputId = "especie",      # identificador del widget
+  label = "Especie",        # etiqueta de la lista
+  choices = lista_especies, # lista de opciones para seleccionar de la lista
+  selected = "Todas"        # opción seleccionada por defecto
+)
+
+# Lista ordenada de lista roja
+# con un elemento adicional = "Todas"
+lista_roja <- unique(registros_union_especies_regiones$iucnRedListCategory)
+lista_roja <- sort(lista_roja)
+lista_roja <- c("Todas", lista_roja)
+
+# Widget de lista de selección de lista roja
+selectInput(
+  inputId = "lista roja",      # identificador del widget
+  label = "Lista Roja",        # etiqueta de la lista
+  choices = lista_roja, # lista de opciones para seleccionar de la lista
+  selected = "Todas"        # opción seleccionada por defecto
+)
+
+# Lista ordenada de regiones
+# con un elemento adicional = "Todas"
+lista_regiones <- unique(registros_union_especies_regiones$region)
+lista_regiones <- sort(lista_regiones)
+lista_regiones <- c("Todas", lista_regiones)
+
+# Widget de lista de selección de regiones socioeconomicas
+selectInput(
+  inputId = "regiones",      # identificador del widget
+  label = "Regiones",        # etiqueta de la lista
+  choices = lista_regiones, # lista de opciones para seleccionar de la lista
+  selected = "Todas"        # opción seleccionada por defecto
+)
+
+# Edad mínima y máximo
+año_minimo <- min(registros_union_especies_regiones$year, na.rm = TRUE)
+año_maximo <- max(registros_union_especies_regiones$year, na.rm = TRUE)
+
+# Widget deslizador de selección de año
+sliderInput(
+  inputId = "año",
+  label = "año",
+  min = año_minimo,
+  max = año_maximo,
+  value = c(0, 100)
+)
+```
+
+# Tabla
+
+```{r}
+#| label: salida-tabla
+#| title: "Tabla de registros de presencia"
+
+
+# Tabla interactiva
+
+dataTableOutput(
+	outputId =  "tabla" # identificador del widget
+)
+```
+
+# Mapa
+
+```{r}
+#| label: salida-mapa
+#| title: "Mapa de registros de presencia y regiones socioeconómicas"
+
+
+# Mapa interactivo
+
+leafletOutput(
+	outputId =  "mapa" # identificador del widget
+)
+```
+
+# Grafico
+
+```{r}
+#| label: salida-grafico
+#| title: "Gráfico de barras de cantidad de registros de presencia en regiones socioeconómicas"
+
+
+# Gráfico interactiva
+
+plotlyOutput(
+	outputId =  "grafico" # identificador del widget
+)
+```
+
+```{r}
+#| label: servidor
+#| context: server
+
+# Función reactiva para filtrar los registros de presencia
+# de acuerdo con los filtros especificados por el usuario
+filtrar_registros <- reactive({
+  # Valor inicial del objeto que va a retornarse
+  registros_filtrados <- registros_union_especies_regiones
+  
+  # Se realiza el filtro, solamente si el usario ha seleccionado 
+  # una opción diferente a "Todas" en la lista de selección de especies
+  if (input$especie != "Todas") {
+    registros_filtrados <-
+      registros_filtrados |>
+      filter(species == input$especie)
+  }
+  
+  # Filtro por año mínimo
+  registros_filtrados <-
+    registros_filtrados |>
+    filter(year >= input$año[1])
+  
+    # Filtro por año maximo
+  registros_filtrados <-
+    registros_filtrados |>
+    filter(year <= input$año[2])
+
+  return(registros_filtrados)
+}) 
+
+# Tabla interactiva de registros de presencia
+output$tabla <- renderDataTable({
+  # Filtrado del conjunto de datos
+  registros_filtrados <- registros_union_especies_regiones
+  
+  # Tabla interactiva
+  registros_union_especies_regiones |>
+    st_drop_geometry() |>
+    select(species, iucnRedListCategory, region, eventDate) |>
+    datatable(
+      rownames = FALSE,
+      colnames = c("Especie", "Categoría", "Region", "Fecha"),
+      options = list(
+        pageLength = 10,
+        language = list(url = '//cdn.datatables.net/plug-ins/1.10.11/i18n/Spanish.json')
+      )
+    )
+})
+
+# Mapa interactivo de registros de presencia
+output$mapa <- renderLeaflet({
+	# Filtrado del conjunto de datos
+  registros_filtrados <- registros_union_especies_regiones
+  
+  # Mapa interactivo
+colores_especies <- colorFactor(
+  palette = viridis(length(unique(registros_union_especies_regiones$species))),
+  domain = registros_union_especies_regiones$species
+)
+  
+  leaflet() |>
+    setView(
+    lng = -84.194552,
+    lat = 9.572735,
+    zoom = 7) |>
+    addTiles(group = "Mapa general (OpenStreetMap)") |>
+    addPolygons(
+    data = regiones_socioeconomicas,
+    color = "black",
+    fillColor = "transparent",
+    stroke = TRUE,
+    weight = 1.5,
+    popup = paste(
+      paste("<strong>Region:</strong>", regiones_socioeconomicas$region),
+      sep = "<br/>"
+    ),
+      group = "Regiones"
+    ) |>
+    addCircleMarkers(
+      data = registros_union_especies_regiones,
+      stroke = F,
+      radius = 2,
+      fillColor = ~colores_especies(registros_union_especies_regiones$species),
+      fillOpacity = 1.0,
+      popup = paste(
+        paste0("<strong>Especie</strong>: ", registros_union_especies_regiones$species),
+        paste0("<strong>Lista Roja</strong>: ", registros_union_especies_regiones$iucnRedListCategory),
+        paste0("<strong>Region</strong>: ", registros_union_especies_regiones$region),
+        paste0("<strong>Fecha</strong>: ", registros_union_especies_regiones$eventDate),
+        sep = "<br>"
+      ),
+      group = "Especies"
+    ) |>
+    addScaleBar(
+    position = "bottomleft", 
+    options = scaleBarOptions(imperial = FALSE)
+  ) |>  
+    addLayersControl(
+    baseGroups = c(
+      "Mapa general (OSM)",
+      "Imágenes satelitales (ESRI World Imagery)"
+      ),
+  overlayGroups = c("Regiones", "Especies")) |>
+    addResetMapButton() |>
+    addSearchOSM() |>
+    addMouseCoordinates()
+})
+
+
+# Gráfico interactivo de registros de presencia por especie
+output$grafico <- renderPlotly({
+  
+  # Filtrado del conjunto de datos
+  registros_filtrados <- registros_union_especies_regiones
+  
+  grafico_ggplot2 <-
+    registros_union_especies_regiones |>
+    st_drop_geometry() |>
+    group_by(region) |>
+    summarize(n = n()) |>
+    ggplot(aes(x = reorder(region, -n), 
+               y = n, na.rm = TRUE)) +
+    ggtitle("Registros de presencia en regiones socioeconómicas") +
+    geom_col() +
+    xlab("Region") +
+    ylab("Cantidad de registros")+
+  theme_economist()
+  
+  ggplotly(grafico_ggplot2)
+})
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
